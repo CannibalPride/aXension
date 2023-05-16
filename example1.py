@@ -5,6 +5,7 @@ Check the README.md for complete documentation.
 
 import cv2
 from gaze_tracking import GazeTracking
+import imutils
 
 if __name__ == "__main__":
     gaze = GazeTracking()
@@ -13,6 +14,7 @@ if __name__ == "__main__":
     while True:
         # We get a new frame from the webcam
         _, frame = webcam.read()
+        frame = imutils.resize(frame, width=900)
 
         # We send this frame to GazeTracking to analyze it
         gaze.refresh(frame)
