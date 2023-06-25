@@ -6,7 +6,8 @@ import imutils
 import numpy as np
 from .eye import Eye
 from .calibration import Calibration
-
+import time
+import math
 
 class GazeTracking(object):
     """
@@ -21,6 +22,26 @@ class GazeTracking(object):
         self.eye_right = None
         self.calibration = Calibration()
         self.rectangle_shape = None
+
+        self.avg_horizontal_ratio = 0
+        self.avg_vertical_ratio = 0
+        self.avg_pupil_left_coords = (0, 0)
+        self.avg_pupil_right_coords = (0, 0)
+        self.avg_head_pose_angle = [0, 0, 0, 0, 0, 0, 0, 0]
+
+        self._reset_averages()
+        self.start_time = 5
+        self.average_time_interval = 1  # Average time interval in seconds
+
+        # Initialize variables for deviation thresholds
+        self.horizontal_ratio_deviation_threshold = 0.2
+        self.vertical_ratio_deviation_threshold = 0.2
+        self.pupil_coords_deviation_threshold = 10
+        self.head_pose_angle_deviation_threshold = 10
+
+        # Initialize time tracking variables
+        self.start_time = None
+        self.end_time = None
 
         self.image_points = None
         self.model_points = None
@@ -57,6 +78,19 @@ class GazeTracking(object):
             return True
         except Exception:
             return False
+
+    def _reset_averages(self):
+        # Reset average values and recorded data
+        self.avg_horizontal_ratio = 0
+        self.avg_vertical_ratio = 0
+        self.avg_pupil_left_coords = (0, 0)
+        self.avg_pupil_right_coords = (0, 0)
+
+        self.horizontal_ratio_values = []
+        self.vertical_ratio_values = []
+        self.pupil_left_coords_values = []
+        self.pupil_right_coords_values = []
+        self.head_pose_angle_values = []
 
     def _analyze(self):
         """Detects the face and initialize Eye objects"""
@@ -132,9 +166,67 @@ class GazeTracking(object):
             # Find face landmarks by providing rectangle for each face
             self.rectangle_shape = self._predictor(frame, newRect)
 
+            self._update_averages()
+
         except IndexError:
             self.eye_left = None
             self.eye_right = None
+
+    def _update_averages(self):
+        """Update the average values of horizontal and vertical ratios, pupil coordinates, and head pose angle"""
+        if self.start_time is None:
+            self.start_time = time.time()
+            return
+
+        elapsed_time = time.time() - self.start_time
+
+        if elapsed_time >= self.average_time_interval:
+            # Calculate averages
+            num_frames = int(elapsed_time / self.average_time_interval)
+
+            pupil_left_coords = self.pupil_left_coords()
+            if pupil_left_coords is not None:
+                avg_pupil_left_x = (self.avg_pupil_left_coords[0] * num_frames + pupil_left_coords[0]) / (
+                            num_frames + 1)
+                avg_pupil_left_y = (self.avg_pupil_left_coords[1] * num_frames + pupil_left_coords[1]) / (
+                            num_frames + 1)
+                self.avg_pupil_left_coords = (avg_pupil_left_x, avg_pupil_left_y)
+            print("LEFT PUPIL :      ", self.pupil_left_coords())
+            print("AVG LEFT PUPIL:   ", self.avg_pupil_left_coords)
+
+            pupil_right_coords = self.pupil_right_coords()
+            if pupil_right_coords is not None:
+                avg_pupil_right_x = (self.avg_pupil_right_coords[0] * num_frames + pupil_right_coords[0]) / (
+                            num_frames + 1)
+                avg_pupil_right_y = (self.avg_pupil_right_coords[1] * num_frames + pupil_right_coords[1]) / (
+                            num_frames + 1)
+                self.avg_pupil_right_coords = (avg_pupil_right_x, avg_pupil_right_y)
+            print("RIGHT PUPIL :     ", self.pupil_right_coords())
+            print("AVG RIGHT PUPIL:  ", self.avg_pupil_right_coords)
+
+            horizontal_ratio = self.horizontal_ratio()
+            if horizontal_ratio is not None:
+                self.avg_horizontal_ratio = (self.avg_horizontal_ratio * num_frames + horizontal_ratio) / (
+                            num_frames + 1)
+            print("HORIZONTAL RATIO:     ", self.horizontal_ratio())
+            print("AVG HORIZONTAL RATIO: ", self.avg_horizontal_ratio)
+
+            vertical_ratio = self.vertical_ratio()
+            if vertical_ratio is not None:
+                self.avg_vertical_ratio = (self.avg_vertical_ratio * num_frames + vertical_ratio) / (num_frames + 1)
+            print("VERTICAL RATIO:       ", self.vertical_ratio())
+            print("AVG VERTICAL RATIO:   ", self.avg_vertical_ratio)
+
+            head_pose_angle = self.head_pose_angle()
+            if head_pose_angle is not None:
+                for i in range(8):
+                    self.avg_head_pose_angle[i] = (self.avg_head_pose_angle[i] * num_frames + head_pose_angle[i]) / (
+                                num_frames + 1)
+            print("HEAD POSE:     ", head_pose_angle)
+            print("AVG HEAD POSE: ", self.avg_head_pose_angle)
+
+            # Reset start time
+            self.start_time = time.time()
 
     def refresh(self, frame):
         """Refreshes the frame and analyzes it.
@@ -179,15 +271,39 @@ class GazeTracking(object):
             pupil_right = self.eye_right.pupil.y / (self.eye_right.center[1] * 2 - 10)
             return (pupil_left + pupil_right) / 2
 
+    def head_pose_angle(self):
+        def calculate_line_length(x1, y1, x2, y2):
+            length = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+            return length
+
+        def calculate_line_angle(x1, y1, x2, y2):
+            angle = math.atan2(y2 - y1, x2 - x1) * 180 / math.pi
+            return angle
+
+        # Calculate length and angle for each line
+        length_1 = calculate_line_length(self.b11[0], self.b11[1], self.b1[0], self.b1[1])
+        angle_1 = calculate_line_angle(self.b11[0], self.b11[1], self.b1[0], self.b1[1])
+
+        length_2 = calculate_line_length(self.b12[0], self.b12[1], self.b2[0], self.b2[1])
+        angle_2 = calculate_line_angle(self.b12[0], self.b12[1], self.b2[0], self.b2[1])
+
+        length_3 = calculate_line_length(self.b13[0], self.b13[1], self.b3[0], self.b3[1])
+        angle_3 = calculate_line_angle(self.b13[0], self.b13[1], self.b3[0], self.b3[1])
+
+        length_4 = calculate_line_length(self.b14[0], self.b14[1], self.b4[0], self.b4[1])
+        angle_4 = calculate_line_angle(self.b14[0], self.b14[1], self.b4[0], self.b4[1])
+
+        return [length_1, angle_1, length_2, angle_2, length_3, angle_3, length_4, angle_4]
+
     def is_right(self):
         """Returns true if the user is looking to the right"""
         if self.pupils_located:
-            return self.horizontal_ratio() <= 0.6
+            return self.horizontal_ratio() <= 0.5
 
     def is_left(self):
         """Returns true if the user is looking to the left"""
         if self.pupils_located:
-            return self.horizontal_ratio() >= 0.9
+            return self.horizontal_ratio() >= 0.7
 
     def is_center(self):
         """Returns true if the user is looking to the center"""
@@ -210,6 +326,7 @@ class GazeTracking(object):
             color = (0, 255, 0)
             x_left, y_left = self.pupil_left_coords()
             x_right, y_right = self.pupil_right_coords()
+
             cv2.line(frame, (x_left - 5, y_left), (x_left + 5, y_left), color)
             cv2.line(frame, (x_left, y_left - 5), (x_left, y_left + 5), color)
             cv2.line(frame, (x_right - 5, y_right), (x_right + 5, y_right), color)
@@ -219,19 +336,22 @@ class GazeTracking(object):
             for p in self.rectangle_shape.parts():
                 cv2.circle(frame, (p.x, p.y), 2, (0, 255, 0), -1)
 
-            self.draw_line(frame, self.b1, self.b3)
-            self.draw_line(frame, self.b3, self.b2)
-            self.draw_line(frame, self.b2, self.b4)
-            self.draw_line(frame, self.b4, self.b1)
+            # Inner sides of the box
+            self.draw_line(frame, self.b1, self.b3, color=(0, 255, 0))  # Top side
+            self.draw_line(frame, self.b3, self.b2, color=(0, 255, 0))  # Left side
+            self.draw_line(frame, self.b2, self.b4, color=(0, 255, 0))  # Bottom side
+            self.draw_line(frame, self.b4, self.b1, color=(0, 255, 0))  # Right side
 
-            self.draw_line(frame, self.b11, self.b13)
-            self.draw_line(frame, self.b13, self.b12)
-            self.draw_line(frame, self.b12, self.b14)
-            self.draw_line(frame, self.b14, self.b11)
+            # Outer sides of the box
+            self.draw_line(frame, self.b11, self.b13, color=(255, 0, 0))  # Top side
+            self.draw_line(frame, self.b13, self.b12, color=(255, 0, 0))  # Left side
+            self.draw_line(frame, self.b12, self.b14, color=(255, 0, 0))  # Bottom side
+            self.draw_line(frame, self.b14, self.b11, color=(255, 0, 0))  # Right side
 
-            self.draw_line(frame, self.b11, self.b1, color=(0, 0, 255))
-            self.draw_line(frame, self.b13, self.b3, color=(0, 0, 255))
-            self.draw_line(frame, self.b12, self.b2, color=(0, 0, 255))
-            self.draw_line(frame, self.b14, self.b4, color=(0, 0, 255))
+            # Middle sides of the box
+            self.draw_line(frame, self.b11, self.b1, color=(0, 0, 255))  # Upper Right
+            self.draw_line(frame, self.b13, self.b3, color=(0, 0, 255))  # Upper Left
+            self.draw_line(frame, self.b12, self.b2, color=(0, 0, 255))  # Lower Left
+            self.draw_line(frame, self.b14, self.b4, color=(0, 0, 255))  # Lower Right
 
         return frame

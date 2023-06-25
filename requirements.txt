@@ -1,6 +1,5 @@
 numpy~=1.22.0
 opencv_python
 dlib~=19.24.99
-
 opencv-python~=4.7.0.72
 imutils~=0.5.4

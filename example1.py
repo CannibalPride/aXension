@@ -21,7 +21,7 @@ if __name__ == "__main__":
 
         frame = gaze.annotated_frame()
         text = "Not Found"
-
+        #text = f"Tracking: {gaze.determine_gaze_direction()}"
         if gaze.is_blinking():
             text = "Blinking"
         elif gaze.is_right():
