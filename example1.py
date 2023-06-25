@@ -36,7 +36,7 @@ if __name__ == "__main__":
         cv2.putText(frame, "Left pupil:  " + str(gaze.pupil_left_coords()), (90, 90), cv2.FONT_HERSHEY_COMPLEX, 0.5, (147, 31, 58), 1)
         cv2.putText(frame, "Right pupil: " + str(gaze.pupil_right_coords()), (90, 110), cv2.FONT_HERSHEY_COMPLEX, 0.5, (147, 31, 58), 1)
         cv2.putText(frame, "Vertical Ratio:  " + str(gaze.horizontal_ratio()), (90, 125), cv2.FONT_HERSHEY_COMPLEX, 0.5, (147, 31, 58), 1)
-        cv2.putText(frame, "Horizontal Ration: " + str(gaze.vertical_ratio()), (90, 145), cv2.FONT_HERSHEY_COMPLEX, 0.5, (147, 31, 58), 1)
+        cv2.putText(frame, "Horizontal Ratio: " + str(gaze.vertical_ratio()), (90, 145), cv2.FONT_HERSHEY_COMPLEX, 0.5, (147, 31, 58), 1)
 
         cv2.imshow("PyGaze", frame)
 

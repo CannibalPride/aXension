@@ -31,7 +31,7 @@ class GazeTracking(object):
 
         self._reset_averages()
         self.start_time = 5
-        self.average_time_interval = 1  # Average time interval in seconds
+        self.average_time_interval = 1  # Average time interval in seconds, set lower than 1 for real env
 
         # Initialize variables for deviation thresholds
         self.horizontal_ratio_deviation_threshold = 0.2
@@ -184,6 +184,7 @@ class GazeTracking(object):
             # Calculate averages
             num_frames = int(elapsed_time / self.average_time_interval)
 
+            print(f"\n\nnum_frame: {num_frames}\n")
             pupil_left_coords = self.pupil_left_coords()
             if pupil_left_coords is not None:
                 avg_pupil_left_x = (self.avg_pupil_left_coords[0] * num_frames + pupil_left_coords[0]) / (
@@ -191,29 +192,40 @@ class GazeTracking(object):
                 avg_pupil_left_y = (self.avg_pupil_left_coords[1] * num_frames + pupil_left_coords[1]) / (
                             num_frames + 1)
                 self.avg_pupil_left_coords = (avg_pupil_left_x, avg_pupil_left_y)
+                deviation_left_x = abs(pupil_left_coords[0] - self.avg_pupil_left_coords[0])
+                deviation_left_y = abs(pupil_left_coords[1] - self.avg_pupil_left_coords[1])
+                if deviation_left_x > self.pupil_coords_deviation_threshold or deviation_left_y > self.pupil_coords_deviation_threshold:
+                    print("Deviation detected in left pupil coordinates.")
             print("LEFT PUPIL :      ", self.pupil_left_coords())
             print("AVG LEFT PUPIL:   ", self.avg_pupil_left_coords)
 
             pupil_right_coords = self.pupil_right_coords()
             if pupil_right_coords is not None:
-                avg_pupil_right_x = (self.avg_pupil_right_coords[0] * num_frames + pupil_right_coords[0]) / (
-                            num_frames + 1)
-                avg_pupil_right_y = (self.avg_pupil_right_coords[1] * num_frames + pupil_right_coords[1]) / (
-                            num_frames + 1)
+                avg_pupil_right_x = (self.avg_pupil_right_coords[0] * num_frames + pupil_right_coords[0]) / (num_frames + 1)
+                avg_pupil_right_y = (self.avg_pupil_right_coords[1] * num_frames + pupil_right_coords[1]) / (num_frames + 1)
                 self.avg_pupil_right_coords = (avg_pupil_right_x, avg_pupil_right_y)
+                deviation_right_x = abs(pupil_right_coords[0] - self.avg_pupil_right_coords[0])
+                deviation_right_y = abs(pupil_right_coords[1] - self.avg_pupil_right_coords[1])
+                if deviation_right_x > self.pupil_coords_deviation_threshold or deviation_right_y > self.pupil_coords_deviation_threshold:
+                    print("Deviation detected in right pupil coordinates.")
             print("RIGHT PUPIL :     ", self.pupil_right_coords())
             print("AVG RIGHT PUPIL:  ", self.avg_pupil_right_coords)
 
             horizontal_ratio = self.horizontal_ratio()
             if horizontal_ratio is not None:
-                self.avg_horizontal_ratio = (self.avg_horizontal_ratio * num_frames + horizontal_ratio) / (
-                            num_frames + 1)
+                self.avg_horizontal_ratio = (self.avg_horizontal_ratio * num_frames + horizontal_ratio) / (num_frames + 1)
+                deviation_horizontal = abs(horizontal_ratio - self.avg_horizontal_ratio)
+                if deviation_horizontal > self.horizontal_ratio_deviation_threshold:
+                    print("Deviation detected in horizontal ratio.")
             print("HORIZONTAL RATIO:     ", self.horizontal_ratio())
             print("AVG HORIZONTAL RATIO: ", self.avg_horizontal_ratio)
 
             vertical_ratio = self.vertical_ratio()
             if vertical_ratio is not None:
                 self.avg_vertical_ratio = (self.avg_vertical_ratio * num_frames + vertical_ratio) / (num_frames + 1)
+                deviation_vertical = abs(vertical_ratio - self.avg_vertical_ratio)
+                if deviation_vertical > self.vertical_ratio_deviation_threshold:
+                    print("Deviation detected in vertical ratio.")
             print("VERTICAL RATIO:       ", self.vertical_ratio())
             print("AVG VERTICAL RATIO:   ", self.avg_vertical_ratio)
 
@@ -222,6 +234,9 @@ class GazeTracking(object):
                 for i in range(8):
                     self.avg_head_pose_angle[i] = (self.avg_head_pose_angle[i] * num_frames + head_pose_angle[i]) / (
                                 num_frames + 1)
+                    deviation_angle = abs(head_pose_angle[i] - self.avg_head_pose_angle[i])
+                    if deviation_angle > self.head_pose_angle_deviation_threshold:
+                        print(f"Deviation detected in head pose angle {i + 1}.")
             print("HEAD POSE:     ", head_pose_angle)
             print("AVG HEAD POSE: ", self.avg_head_pose_angle)
 

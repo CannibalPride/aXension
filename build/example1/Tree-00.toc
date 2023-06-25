@@ -1,0 +1,5 @@
+('c:\\users\\canny\\appdata\\local\\packages\\pythonsoftwarefoundation.python.3.11_qbz5n2kfra8p0\\localcache\\local-packages\\python311\\site-packages\\dlib-19.24.99-py3.11-win-amd64.egg',
+ None,
+ {'*.pyd', '*.py', '*.cp311-win_amd64.pyd', '*.pyw', '*.pyc', 'EGG-INFO'},
+ 'DATA',
+ [])
