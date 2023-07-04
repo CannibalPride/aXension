@@ -7,20 +7,25 @@ import cv2
 from gaze_tracking import GazeTracking
 import imutils
 
+text = "Not Found"
+
 if __name__ == "__main__":
     gaze = GazeTracking()
     webcam = cv2.VideoCapture(0)
 
     while True:
         # We get a new frame from the webcam
-        _, frame = webcam.read()
+        success, frame = webcam.read()
+        if not success:  # no frame input
+            print(text)
+
         frame = imutils.resize(frame, width=900)
+        frame.flags.writeable = False
 
         # We send this frame to GazeTracking to analyze it
         gaze.refresh(frame)
 
         frame = gaze.annotated_frame()
-        text = "Not Found"
         #text = f"Tracking: {gaze.determine_gaze_direction()}"
         if gaze.is_blinking():
             text = "Blinking"

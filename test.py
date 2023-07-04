@@ -1,54 +1,53 @@
 import cv2
 import numpy as np
 
-# Screen dimensions (adjust according to your screen resolution)
-screen_width, screen_height = 1920, 1080
-
-# Create an empty screen
-screen = np.zeros((screen_height, screen_width, 3), dtype=np.uint8)
-
-# Initialize the webcam
-cap = cv2.VideoCapture(0)
-
-# Load the pre-trained face and eye cascade classifiers
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+# Load the pre-trained Haar cascade for detecting eyes
 eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
 
-while True:
-    # Read a frame from the webcam
-    ret, frame = cap.read()
-    if not ret:
-        break
+# Capture video from the default camera
+cap = cv2.VideoCapture(0)
 
-    # Convert the frame to grayscale for face and eye detection
+while True:
+    # Read the current frame
+    ret, frame = cap.read()
+
+    # Convert the frame to grayscale
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Detect faces in the frame
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    # Detect eyes in the frame
+    eyes = eye_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
 
-    for (x, y, w, h) in faces:
-        # Extract the region of interest (ROI) within the face for eye detection
-        roi_gray = gray[y:y + h, x:x + w]
-        roi_color = frame[y:y + h, x:x + w]
+    # Draw rectangles around the detected eyes
+    for (ex, ey, ew, eh) in eyes:
+        cv2.rectangle(frame, (ex, ey), (ex + ew, ey + eh), (0, 255, 0), 2)
 
-        # Detect eyes in the face region
-        eyes = eye_cascade.detectMultiScale(roi_gray)
+        # Calculate the center of each eye
+        eye_center_x = ex + ew // 2
+        eye_center_y = ey + eh // 2
 
-        for (ex, ey, ew, eh) in eyes:
-            # Calculate the gaze position on the screen
-            gaze_x = int((x + ex + ew / 2) * (screen_width / frame.shape[1]))
-            gaze_y = int((y + ey + eh / 2) * (screen_height / frame.shape[0]))
+        # Determine the quadrant based on the eye center coordinates
+        height, width, _ = frame.shape
+        if eye_center_x < width // 2:
+            if eye_center_y < height // 2:
+                quadrant = "Top Left"
+            else:
+                quadrant = "Bottom Left"
+        else:
+            if eye_center_y < height // 2:
+                quadrant = "Top Right"
+            else:
+                quadrant = "Bottom Right"
 
-            # Draw a marker at the estimated gaze position on the screen
-            cv2.drawMarker(screen, (gaze_x, gaze_y), (0, 0, 255), cv2.MARKER_CROSS, markerSize=20, thickness=2)
+        # Display the quadrant on the frame
+        cv2.putText(frame, quadrant, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
-    # Show the screen with the gaze marker
-    cv2.imshow('Gaze Tracking', screen)
+    # Display the resulting frame
+    cv2.imshow('Eye Tracking', frame)
 
-    # Break the loop if 'q' is pressed
+    # Exit loop if 'q' is pressed
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
-# Release the capture and close windows
+# Release the video capture and close all windows
 cap.release()
 cv2.destroyAllWindows()

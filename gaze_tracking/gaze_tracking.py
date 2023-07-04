@@ -2,7 +2,6 @@ from __future__ import division
 import os
 import cv2
 import dlib
-import imutils
 import numpy as np
 from .eye import Eye
 from .calibration import Calibration
@@ -22,6 +21,10 @@ class GazeTracking(object):
         self.eye_right = None
         self.calibration = Calibration()
         self.rectangle_shape = None
+        self.left_pupil = None
+        self.right_pupil = None
+        self.left_gaze = None
+        self.right_gaze = None
 
         self.avg_horizontal_ratio = 0
         self.avg_vertical_ratio = 0
@@ -43,7 +46,8 @@ class GazeTracking(object):
         self.start_time = None
         self.end_time = None
 
-        self.image_points = None
+        self.image_points_2d = None
+        self.image_points_3d = None
         self.model_points = None
 
         self.b1 = None
@@ -103,13 +107,22 @@ class GazeTracking(object):
             self.eye_left = Eye(frame, landmarks, 0, self.calibration)
             self.eye_right = Eye(frame, landmarks, 1, self.calibration)
 
-            self.image_points = np.array([
+            self.image_points_2d = np.array([
                 (landmarks.part(33).x, landmarks.part(33).y),  # Nose tip
                 (landmarks.part(8).x, landmarks.part(8).y),  # Chin
                 (landmarks.part(36).x, landmarks.part(36).y),  # Left eye left corner
                 (landmarks.part(45).x, landmarks.part(45).y),  # Right eye right corne
                 (landmarks.part(48).x, landmarks.part(48).y),  # Left Mouth corner
                 (landmarks.part(54).x, landmarks.part(54).y)  # Right mouth corner
+            ], dtype="double")
+
+            self.image_points_3d = np.array([
+                (landmarks.part(33).x, landmarks.part(33).y, 0),  # Nose tip
+                (landmarks.part(8).x, landmarks.part(8).y, 0),  # Chin
+                (landmarks.part(36).x, landmarks.part(36).y, 0),  # Left eye left corner
+                (landmarks.part(45).x, landmarks.part(45).y, 0),  # Right eye right corner
+                (landmarks.part(48).x, landmarks.part(48).y, 0),  # Left Mouth corner
+                (landmarks.part(54).x, landmarks.part(54).y, 0)  # Right mouth corner
             ], dtype="double")
 
             # 3D model points.
@@ -122,6 +135,9 @@ class GazeTracking(object):
                 (150.0, -150.0, -125.0)  # Right mouth corner
             ])
 
+            Eye_ball_center_right = np.array([[-145.05], [-163.5], [-197.5]])
+            Eye_ball_center_left = np.array([[145.05], [-163.5], [-197.5]])  # the center of the left eyeball as a vector.
+
             focal_length = size[1]
             center = (size[1] / 2, size[0] / 2)
             camera_matrix = np.array(
@@ -131,26 +147,81 @@ class GazeTracking(object):
             )
 
             dist_coeffs = np.zeros((4, 1))  # Assuming no lens distortion
-            (success, rotation_vector, translation_vector) = cv2.solvePnP(self.model_points, self.image_points, camera_matrix,
-                                                                          dist_coeffs)
+            (success, rotation_vector, translation_vector) = cv2.solvePnP(
+                self.model_points,
+                self.image_points_2d,
+                camera_matrix,
+                dist_coeffs,
+                flags=cv2.SOLVEPNP_ITERATIVE
+            )
 
-            (self.b1, jacobian) = cv2.projectPoints(np.array([(350.0, 270.0, 0.0)]), rotation_vector, translation_vector,
-                                               camera_matrix, dist_coeffs)
+            left_pupil = self.pupil_left_coords()
+            right_pupil = self.pupil_right_coords()
+
+            # Transformation between image point to world point
+            _, transformation, _ = cv2.estimateAffine3D(self.image_points_3d, self.model_points)  # image to world transformation
+            try:
+                if transformation is not None:  # if estimateAffine3D succeeded
+                    # project left pupil image point into 3D world point
+                    left_pupil_world_cord = transformation @ np.array([[left_pupil[0], left_pupil[1], 0, 1]]).T
+
+                    # project right pupil image point into 3D world point
+                    right_pupil_world_cord = transformation @ np.array([[right_pupil[0], right_pupil[1], 0, 1]]).T
+
+                    # 3D gaze points (10 is arbitrary value denoting gaze distance)
+                    left_gaze = Eye_ball_center_left + (left_pupil_world_cord - Eye_ball_center_left) * 10
+                    right_gaze = Eye_ball_center_right + (right_pupil_world_cord - Eye_ball_center_right) * 10
+
+                    # Project the 3D gaze directions onto the image plane.
+                    (left_gaze_2d, _) = cv2.projectPoints((int(left_gaze[0]), int(left_gaze[1]), int(left_gaze[2])),
+                                                          rotation_vector, translation_vector, camera_matrix,
+                                                          dist_coeffs)
+                    (right_gaze_2d, _) = cv2.projectPoints((int(right_gaze[0]), int(right_gaze[1]), int(right_gaze[2])),
+                                                           rotation_vector, translation_vector, camera_matrix,
+                                                           dist_coeffs)
+
+                    # project 3D head pose into the image plane
+                    (left_head_pose, _) = cv2.projectPoints(
+                        (int(left_pupil_world_cord[0]), int(left_pupil_world_cord[1]), int(40)),
+                        rotation_vector, translation_vector, camera_matrix, dist_coeffs)
+                    (right_head_pose, _) = cv2.projectPoints(
+                        (int(right_pupil_world_cord[0]), int(right_pupil_world_cord[1]), int(40)),
+                        rotation_vector, translation_vector, camera_matrix, dist_coeffs)
+
+                    # correct gaze for head rotation
+                    left_gaze_direction = left_pupil + (left_gaze_2d[0][0] - left_pupil) - (
+                            left_head_pose[0][0] - left_pupil)
+                    right_gaze_direction = right_pupil + (right_gaze_2d[0][0] - right_pupil) - (
+                            right_head_pose[0][0] - right_pupil)
+
+                    self.left_pupil = (int(left_pupil[0]), int(left_pupil[1]))
+                    self.left_gaze = (int(left_gaze_direction[0]), int(left_gaze_direction[1]))
+                    self.right_pupil = (int(right_pupil[0]), int(right_pupil[1]))
+                    self.right_gaze = (int(right_gaze_direction[0]), int(right_gaze_direction[1]))
+                else:
+                    print("No Transformation")
+            except TypeError as e:
+                print("An error occurred:", e)
+
+
+            (self.b1, jacobian) = cv2.projectPoints(np.array([(350.0, 270.0, 0.0)]), rotation_vector,
+                                                    translation_vector,
+                                                    camera_matrix, dist_coeffs)
             (self.b2, jacobian) = cv2.projectPoints(np.array([(-350.0, -270.0, 0.0)]), rotation_vector,
-                                               translation_vector, camera_matrix, dist_coeffs)
+                                                    translation_vector, camera_matrix, dist_coeffs)
             (self.b3, jacobian) = cv2.projectPoints(np.array([(-350.0, 270, 0.0)]), rotation_vector, translation_vector,
-                                               camera_matrix, dist_coeffs)
+                                                    camera_matrix, dist_coeffs)
             (self.b4, jacobian) = cv2.projectPoints(np.array([(350.0, -270.0, 0.0)]), rotation_vector,
-                                               translation_vector, camera_matrix, dist_coeffs)
+                                                    translation_vector, camera_matrix, dist_coeffs)
 
             (self.b11, jacobian) = cv2.projectPoints(np.array([(450.0, 350.0, 400.0)]), rotation_vector,
-                                                translation_vector, camera_matrix, dist_coeffs)
+                                                     translation_vector, camera_matrix, dist_coeffs)
             (self.b12, jacobian) = cv2.projectPoints(np.array([(-450.0, -350.0, 400.0)]), rotation_vector,
-                                                translation_vector, camera_matrix, dist_coeffs)
+                                                     translation_vector, camera_matrix, dist_coeffs)
             (self.b13, jacobian) = cv2.projectPoints(np.array([(-450.0, 350, 400.0)]), rotation_vector,
-                                                translation_vector, camera_matrix, dist_coeffs)
+                                                     translation_vector, camera_matrix, dist_coeffs)
             (self.b14, jacobian) = cv2.projectPoints(np.array([(450.0, -350.0, 400.0)]), rotation_vector,
-                                                translation_vector, camera_matrix, dist_coeffs)
+                                                     translation_vector, camera_matrix, dist_coeffs)
 
             self.b1 = (int(self.b1[0][0][0]), int(self.b1[0][0][1]))
             self.b2 = (int(self.b2[0][0][0]), int(self.b2[0][0][1]))
@@ -162,7 +233,8 @@ class GazeTracking(object):
             self.b13 = (int(self.b13[0][0][0]), int(self.b13[0][0][1]))
             self.b14 = (int(self.b14[0][0][0]), int(self.b14[0][0][1]))
 
-            newRect = dlib.rectangle(int(faces[0].left()), int(faces[0].top()), int(faces[0].right()), int(faces[0].bottom()))
+            newRect = dlib.rectangle(int(faces[0].left()), int(faces[0].top()), int(faces[0].right()),
+                                     int(faces[0].bottom()))
             # Find face landmarks by providing rectangle for each face
             self.rectangle_shape = self._predictor(frame, newRect)
 
@@ -184,41 +256,44 @@ class GazeTracking(object):
             # Calculate averages
             num_frames = int(elapsed_time / self.average_time_interval)
 
-            print(f"\n\nnum_frame: {num_frames}\n")
+            #print(f"\n\nnum_frame: {num_frames}\n")
             pupil_left_coords = self.pupil_left_coords()
             if pupil_left_coords is not None:
                 avg_pupil_left_x = (self.avg_pupil_left_coords[0] * num_frames + pupil_left_coords[0]) / (
-                            num_frames + 1)
+                        num_frames + 1)
                 avg_pupil_left_y = (self.avg_pupil_left_coords[1] * num_frames + pupil_left_coords[1]) / (
-                            num_frames + 1)
+                        num_frames + 1)
                 self.avg_pupil_left_coords = (avg_pupil_left_x, avg_pupil_left_y)
                 deviation_left_x = abs(pupil_left_coords[0] - self.avg_pupil_left_coords[0])
                 deviation_left_y = abs(pupil_left_coords[1] - self.avg_pupil_left_coords[1])
                 if deviation_left_x > self.pupil_coords_deviation_threshold or deviation_left_y > self.pupil_coords_deviation_threshold:
                     print("Deviation detected in left pupil coordinates.")
-            print("LEFT PUPIL :      ", self.pupil_left_coords())
-            print("AVG LEFT PUPIL:   ", self.avg_pupil_left_coords)
+            #print("LEFT PUPIL :      ", self.pupil_left_coords())
+            #print("AVG LEFT PUPIL:   ", self.avg_pupil_left_coords)
 
             pupil_right_coords = self.pupil_right_coords()
             if pupil_right_coords is not None:
-                avg_pupil_right_x = (self.avg_pupil_right_coords[0] * num_frames + pupil_right_coords[0]) / (num_frames + 1)
-                avg_pupil_right_y = (self.avg_pupil_right_coords[1] * num_frames + pupil_right_coords[1]) / (num_frames + 1)
+                avg_pupil_right_x = (self.avg_pupil_right_coords[0] * num_frames + pupil_right_coords[0]) / (
+                            num_frames + 1)
+                avg_pupil_right_y = (self.avg_pupil_right_coords[1] * num_frames + pupil_right_coords[1]) / (
+                            num_frames + 1)
                 self.avg_pupil_right_coords = (avg_pupil_right_x, avg_pupil_right_y)
                 deviation_right_x = abs(pupil_right_coords[0] - self.avg_pupil_right_coords[0])
                 deviation_right_y = abs(pupil_right_coords[1] - self.avg_pupil_right_coords[1])
                 if deviation_right_x > self.pupil_coords_deviation_threshold or deviation_right_y > self.pupil_coords_deviation_threshold:
                     print("Deviation detected in right pupil coordinates.")
-            print("RIGHT PUPIL :     ", self.pupil_right_coords())
-            print("AVG RIGHT PUPIL:  ", self.avg_pupil_right_coords)
+            #print("RIGHT PUPIL :     ", self.pupil_right_coords())
+            #print("AVG RIGHT PUPIL:  ", self.avg_pupil_right_coords)
 
             horizontal_ratio = self.horizontal_ratio()
             if horizontal_ratio is not None:
-                self.avg_horizontal_ratio = (self.avg_horizontal_ratio * num_frames + horizontal_ratio) / (num_frames + 1)
+                self.avg_horizontal_ratio = (self.avg_horizontal_ratio * num_frames + horizontal_ratio) / (
+                            num_frames + 1)
                 deviation_horizontal = abs(horizontal_ratio - self.avg_horizontal_ratio)
                 if deviation_horizontal > self.horizontal_ratio_deviation_threshold:
                     print("Deviation detected in horizontal ratio.")
-            print("HORIZONTAL RATIO:     ", self.horizontal_ratio())
-            print("AVG HORIZONTAL RATIO: ", self.avg_horizontal_ratio)
+            #print("HORIZONTAL RATIO:     ", self.horizontal_ratio())
+            #print("AVG HORIZONTAL RATIO: ", self.avg_horizontal_ratio)
 
             vertical_ratio = self.vertical_ratio()
             if vertical_ratio is not None:
@@ -226,19 +301,19 @@ class GazeTracking(object):
                 deviation_vertical = abs(vertical_ratio - self.avg_vertical_ratio)
                 if deviation_vertical > self.vertical_ratio_deviation_threshold:
                     print("Deviation detected in vertical ratio.")
-            print("VERTICAL RATIO:       ", self.vertical_ratio())
-            print("AVG VERTICAL RATIO:   ", self.avg_vertical_ratio)
+            #print("VERTICAL RATIO:       ", self.vertical_ratio())
+            #print("AVG VERTICAL RATIO:   ", self.avg_vertical_ratio)
 
             head_pose_angle = self.head_pose_angle()
             if head_pose_angle is not None:
                 for i in range(8):
                     self.avg_head_pose_angle[i] = (self.avg_head_pose_angle[i] * num_frames + head_pose_angle[i]) / (
-                                num_frames + 1)
+                            num_frames + 1)
                     deviation_angle = abs(head_pose_angle[i] - self.avg_head_pose_angle[i])
                     if deviation_angle > self.head_pose_angle_deviation_threshold:
                         print(f"Deviation detected in head pose angle {i + 1}.")
-            print("HEAD POSE:     ", head_pose_angle)
-            print("AVG HEAD POSE: ", self.avg_head_pose_angle)
+            #print("HEAD POSE:     ", head_pose_angle)
+            #print("AVG HEAD POSE: ", self.avg_head_pose_angle)
 
             # Reset start time
             self.start_time = time.time()
@@ -369,4 +444,10 @@ class GazeTracking(object):
             self.draw_line(frame, self.b12, self.b2, color=(0, 0, 255))  # Lower Left
             self.draw_line(frame, self.b14, self.b4, color=(0, 0, 255))  # Lower Right
 
+            self.draw_line(frame, self.b12, self.b2, color=(0, 0, 255))  # Lower Left
+            self.draw_line(frame, self.b14, self.b4, color=(0, 0, 255))  # Lower Right
+            # Draw gaze lines on the frame
+            cv2.line(frame, self.left_pupil, self.left_gaze, (0, 0, 255), 2)
+
+            cv2.line(frame, self.right_pupil, self.right_gaze, (0, 0, 255), 2)
         return frame
