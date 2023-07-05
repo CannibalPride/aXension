@@ -3,10 +3,12 @@ import os
 import cv2
 import dlib
 import numpy as np
+
 from .eye import Eye
 from .calibration import Calibration
 import time
 import math
+from queue import Queue
 
 class GazeTracking(object):
     """
@@ -25,6 +27,7 @@ class GazeTracking(object):
         self.right_pupil = None
         self.left_gaze = None
         self.right_gaze = None
+        self.anomaly_queue_log = Queue()
 
         self.avg_horizontal_ratio = 0
         self.avg_vertical_ratio = 0
@@ -32,19 +35,18 @@ class GazeTracking(object):
         self.avg_pupil_right_coords = (0, 0)
         self.avg_head_pose_angle = [0, 0, 0, 0, 0, 0, 0, 0]
 
-        self._reset_averages()
-        self.start_time = 5
+        # Initialize time tracking variables
+        self.start_time = time.time()
+        self.end_time = None
+        self.delay_start = 5
         self.average_time_interval = 1  # Average time interval in seconds, set lower than 1 for real env
 
         # Initialize variables for deviation thresholds
+        self._reset_averages()
         self.horizontal_ratio_deviation_threshold = 0.2
         self.vertical_ratio_deviation_threshold = 0.2
-        self.pupil_coords_deviation_threshold = 10
-        self.head_pose_angle_deviation_threshold = 10
-
-        # Initialize time tracking variables
-        self.start_time = None
-        self.end_time = None
+        self.pupil_coords_deviation_threshold = 100
+        self.head_pose_angle_deviation_threshold = 100
 
         self.image_points_2d = None
         self.image_points_3d = None
@@ -85,6 +87,7 @@ class GazeTracking(object):
 
     def _reset_averages(self):
         # Reset average values and recorded data
+        self.anomaly_queue_log.queue.clear()
         self.avg_horizontal_ratio = 0
         self.avg_vertical_ratio = 0
         self.avg_pupil_left_coords = (0, 0)
@@ -99,6 +102,7 @@ class GazeTracking(object):
     def _analyze(self):
         """Detects the face and initialize Eye objects"""
         frame = cv2.cvtColor(self.frame, cv2.COLOR_BGR2GRAY)
+
         faces = self._face_detector(frame, 0)
         size = frame.shape
 
@@ -159,7 +163,9 @@ class GazeTracking(object):
             right_pupil = self.pupil_right_coords()
 
             # Transformation between image point to world point
-            _, transformation, _ = cv2.estimateAffine3D(self.image_points_3d, self.model_points)  # image to world transformation
+            #_, transformation, _ = cv2.estimateAffine3D(self.image_points_3d, self.model_points)  # image to world transformation
+            transformation = None
+
             try:
                 if transformation is not None:  # if estimateAffine3D succeeded
                     # project left pupil image point into 3D world point
@@ -250,13 +256,14 @@ class GazeTracking(object):
             self.start_time = time.time()
             return
 
-        elapsed_time = time.time() - self.start_time
+        elapsed_time = abs(time.time() - self.start_time)
 
         if elapsed_time >= self.average_time_interval:
             # Calculate averages
             num_frames = int(elapsed_time / self.average_time_interval)
 
-            #print(f"\n\nnum_frame: {num_frames}\n")
+            print(f"\n\nnum_frame: {num_frames}\n")
+
             pupil_left_coords = self.pupil_left_coords()
             if pupil_left_coords is not None:
                 avg_pupil_left_x = (self.avg_pupil_left_coords[0] * num_frames + pupil_left_coords[0]) / (
@@ -267,7 +274,8 @@ class GazeTracking(object):
                 deviation_left_x = abs(pupil_left_coords[0] - self.avg_pupil_left_coords[0])
                 deviation_left_y = abs(pupil_left_coords[1] - self.avg_pupil_left_coords[1])
                 if deviation_left_x > self.pupil_coords_deviation_threshold or deviation_left_y > self.pupil_coords_deviation_threshold:
-                    print("Deviation detected in left pupil coordinates.")
+                    #print("Deviation detected in left pupil coordinates.")
+                    self.anomaly_queue_log.put("Deviation: Left Eye")
             #print("LEFT PUPIL :      ", self.pupil_left_coords())
             #print("AVG LEFT PUPIL:   ", self.avg_pupil_left_coords)
 
@@ -281,7 +289,8 @@ class GazeTracking(object):
                 deviation_right_x = abs(pupil_right_coords[0] - self.avg_pupil_right_coords[0])
                 deviation_right_y = abs(pupil_right_coords[1] - self.avg_pupil_right_coords[1])
                 if deviation_right_x > self.pupil_coords_deviation_threshold or deviation_right_y > self.pupil_coords_deviation_threshold:
-                    print("Deviation detected in right pupil coordinates.")
+                    #print("Deviation detected in right pupil coordinates.")
+                    self.anomaly_queue_log.put("Deviation: Right Eye")
             #print("RIGHT PUPIL :     ", self.pupil_right_coords())
             #print("AVG RIGHT PUPIL:  ", self.avg_pupil_right_coords)
 
@@ -291,7 +300,8 @@ class GazeTracking(object):
                             num_frames + 1)
                 deviation_horizontal = abs(horizontal_ratio - self.avg_horizontal_ratio)
                 if deviation_horizontal > self.horizontal_ratio_deviation_threshold:
-                    print("Deviation detected in horizontal ratio.")
+                    #print("Deviation detected in horizontal ratio.")
+                    self.anomaly_queue_log.put(f"Deviation: Horizontal Ratio")
             #print("HORIZONTAL RATIO:     ", self.horizontal_ratio())
             #print("AVG HORIZONTAL RATIO: ", self.avg_horizontal_ratio)
 
@@ -300,23 +310,25 @@ class GazeTracking(object):
                 self.avg_vertical_ratio = (self.avg_vertical_ratio * num_frames + vertical_ratio) / (num_frames + 1)
                 deviation_vertical = abs(vertical_ratio - self.avg_vertical_ratio)
                 if deviation_vertical > self.vertical_ratio_deviation_threshold:
-                    print("Deviation detected in vertical ratio.")
+                    #print("Deviation detected in vertical ratio.")
+                    self.anomaly_queue_log.put(f"Deviation: Vertical Ratio")
             #print("VERTICAL RATIO:       ", self.vertical_ratio())
             #print("AVG VERTICAL RATIO:   ", self.avg_vertical_ratio)
 
             head_pose_angle = self.head_pose_angle()
             if head_pose_angle is not None:
+                head_pose_angle_deviation = False
                 for i in range(8):
                     self.avg_head_pose_angle[i] = (self.avg_head_pose_angle[i] * num_frames + head_pose_angle[i]) / (
                             num_frames + 1)
                     deviation_angle = abs(head_pose_angle[i] - self.avg_head_pose_angle[i])
                     if deviation_angle > self.head_pose_angle_deviation_threshold:
-                        print(f"Deviation detected in head pose angle {i + 1}.")
+                        #print(f"Deviation detected in head pose angle {i + 1}.")
+                        head_pose_angle_deviation = True
+                if head_pose_angle_deviation:
+                    self.anomaly_queue_log.put(f"Deviation: Head Pose Angle")
             #print("HEAD POSE:     ", head_pose_angle)
             #print("AVG HEAD POSE: ", self.avg_head_pose_angle)
-
-            # Reset start time
-            self.start_time = time.time()
 
     def refresh(self, frame):
         """Refreshes the frame and analyzes it.
