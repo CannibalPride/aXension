@@ -28,6 +28,11 @@ class GazeTracking(object):
         self.left_gaze = None
         self.right_gaze = None
         self.anomaly_queue_log = Queue()
+        self.anomaly_queue_log2 = Queue()
+        self.debug_mode = False
+
+        self.pupil_positions = []
+        self.logged_saccades = set()
 
         self.avg_horizontal_ratio = 0
         self.avg_vertical_ratio = 0
@@ -35,18 +40,23 @@ class GazeTracking(object):
         self.avg_pupil_right_coords = (0, 0)
         self.avg_head_pose_angle = [0, 0, 0, 0, 0, 0, 0, 0]
 
-        # Initialize time tracking variables
+        # Initialize tracking variables
         self.start_time = time.time()
         self.end_time = None
+        self.previous_time = None
+        self.num_frames = None
         self.delay_start = 5
+        self.sampling_rate = None
         self.average_time_interval = 1  # Average time interval in seconds, set lower than 1 for real env
 
         # Initialize variables for deviation thresholds
         self._reset_averages()
         self.horizontal_ratio_deviation_threshold = 0.2
         self.vertical_ratio_deviation_threshold = 0.2
-        self.pupil_coords_deviation_threshold = 100
+        self.pupil_coords_deviation_threshold = 150
         self.head_pose_angle_deviation_threshold = 100
+        self.sampling_rate = None
+        self.saccade_threshold = 37
 
         self.image_points_2d = None
         self.image_points_3d = None
@@ -204,15 +214,14 @@ class GazeTracking(object):
                     self.left_gaze = (int(left_gaze_direction[0]), int(left_gaze_direction[1]))
                     self.right_pupil = (int(right_pupil[0]), int(right_pupil[1]))
                     self.right_gaze = (int(right_gaze_direction[0]), int(right_gaze_direction[1]))
-                else:
-                    print("No Transformation")
+                #else:
+                #    print("No Transformation")
             except TypeError as e:
                 print("An error occurred:", e)
 
 
             (self.b1, jacobian) = cv2.projectPoints(np.array([(350.0, 270.0, 0.0)]), rotation_vector,
-                                                    translation_vector,
-                                                    camera_matrix, dist_coeffs)
+                                                    translation_vector, camera_matrix, dist_coeffs)
             (self.b2, jacobian) = cv2.projectPoints(np.array([(-350.0, -270.0, 0.0)]), rotation_vector,
                                                     translation_vector, camera_matrix, dist_coeffs)
             (self.b3, jacobian) = cv2.projectPoints(np.array([(-350.0, 270, 0.0)]), rotation_vector, translation_vector,
@@ -254,81 +263,174 @@ class GazeTracking(object):
         """Update the average values of horizontal and vertical ratios, pupil coordinates, and head pose angle"""
         if self.start_time is None:
             self.start_time = time.time()
-            return
 
-        elapsed_time = abs(time.time() - self.start_time)
+        if self.previous_time is None:
+            self.previous_time = time.time()
 
-        if elapsed_time >= self.average_time_interval:
-            # Calculate averages
-            num_frames = int(elapsed_time / self.average_time_interval)
+        if self.num_frames is None:
+            self.num_frames = 1
+        else:
+            self.num_frames += 1
 
-            print(f"\n\nnum_frame: {num_frames}\n")
+        elapsed_time = time.time() - self.previous_time
 
+        if elapsed_time != 0:
+            self.sampling_rate = 1 / elapsed_time
+        else:
+            self.sampling_rate = 1
+
+        self.previous_time = time.time()
+
+        if True:
             pupil_left_coords = self.pupil_left_coords()
+            pupil_right_coords = self.pupil_right_coords()
+            horizontal_ratio = self.horizontal_ratio()
+            vertical_ratio = self.vertical_ratio()
+            head_pose_angle = self.head_pose_angle()
+
+            if pupil_left_coords is not None and pupil_right_coords is not None:
+                self.detect_saccades()
+
             if pupil_left_coords is not None:
-                avg_pupil_left_x = (self.avg_pupil_left_coords[0] * num_frames + pupil_left_coords[0]) / (
-                        num_frames + 1)
-                avg_pupil_left_y = (self.avg_pupil_left_coords[1] * num_frames + pupil_left_coords[1]) / (
-                        num_frames + 1)
+                avg_pupil_left_x = (self.avg_pupil_left_coords[0] * self.num_frames + pupil_left_coords[0]) / (
+                        self.num_frames + 1)
+                avg_pupil_left_y = (self.avg_pupil_left_coords[1] * self.num_frames + pupil_left_coords[1]) / (
+                        self.num_frames + 1)
                 self.avg_pupil_left_coords = (avg_pupil_left_x, avg_pupil_left_y)
                 deviation_left_x = abs(pupil_left_coords[0] - self.avg_pupil_left_coords[0])
                 deviation_left_y = abs(pupil_left_coords[1] - self.avg_pupil_left_coords[1])
                 if deviation_left_x > self.pupil_coords_deviation_threshold or deviation_left_y > self.pupil_coords_deviation_threshold:
-                    #print("Deviation detected in left pupil coordinates.")
-                    self.anomaly_queue_log.put("Deviation: Left Eye")
-            #print("LEFT PUPIL :      ", self.pupil_left_coords())
-            #print("AVG LEFT PUPIL:   ", self.avg_pupil_left_coords)
+                    deviation_info = {
+                        'frame': self.num_frames,
+                        'timestamp': time.ctime(time.time()),
+                        'case': "pupil position",
+                        'type': "deviation",
+                        'info': {
+                            'avg_left_pupil_pos': self.avg_pupil_left_coords,
+                            'pupil_left_coords': pupil_left_coords,
+                            'deviation_left_x': deviation_left_x,
+                            'deviation_left_y': deviation_left_y
+                        }
+                    }
+                    self.anomaly_queue_log.put(deviation_info)
 
-            pupil_right_coords = self.pupil_right_coords()
             if pupil_right_coords is not None:
-                avg_pupil_right_x = (self.avg_pupil_right_coords[0] * num_frames + pupil_right_coords[0]) / (
-                            num_frames + 1)
-                avg_pupil_right_y = (self.avg_pupil_right_coords[1] * num_frames + pupil_right_coords[1]) / (
-                            num_frames + 1)
+                avg_pupil_right_x = (self.avg_pupil_right_coords[0] * self.num_frames + pupil_right_coords[0]) / (
+                            self.num_frames + 1)
+                avg_pupil_right_y = (self.avg_pupil_right_coords[1] * self.num_frames + pupil_right_coords[1]) / (
+                            self.num_frames + 1)
                 self.avg_pupil_right_coords = (avg_pupil_right_x, avg_pupil_right_y)
                 deviation_right_x = abs(pupil_right_coords[0] - self.avg_pupil_right_coords[0])
                 deviation_right_y = abs(pupil_right_coords[1] - self.avg_pupil_right_coords[1])
                 if deviation_right_x > self.pupil_coords_deviation_threshold or deviation_right_y > self.pupil_coords_deviation_threshold:
-                    #print("Deviation detected in right pupil coordinates.")
-                    self.anomaly_queue_log.put("Deviation: Right Eye")
-            #print("RIGHT PUPIL :     ", self.pupil_right_coords())
-            #print("AVG RIGHT PUPIL:  ", self.avg_pupil_right_coords)
+                    deviation_info = {
+                        'frame': self.num_frames,
+                        'timestamp': time.ctime(time.time()),
+                        'case': "pupil position",
+                        'type': "deviation",
+                        'info': {
+                            'avg_pupil_right_coords': self.avg_pupil_right_coords,
+                            'pupil_right_coords': pupil_right_coords,
+                            'deviation_right_x': deviation_right_x,
+                            'deviation_right_y': deviation_right_y
+                        }
+                    }
+                    self.anomaly_queue_log.put(deviation_info)
 
-            horizontal_ratio = self.horizontal_ratio()
             if horizontal_ratio is not None:
-                self.avg_horizontal_ratio = (self.avg_horizontal_ratio * num_frames + horizontal_ratio) / (
-                            num_frames + 1)
+                self.avg_horizontal_ratio = (self.avg_horizontal_ratio * self.num_frames + horizontal_ratio) / (
+                            self.num_frames + 1)
                 deviation_horizontal = abs(horizontal_ratio - self.avg_horizontal_ratio)
                 if deviation_horizontal > self.horizontal_ratio_deviation_threshold:
-                    #print("Deviation detected in horizontal ratio.")
-                    self.anomaly_queue_log.put(f"Deviation: Horizontal Ratio")
-            #print("HORIZONTAL RATIO:     ", self.horizontal_ratio())
-            #print("AVG HORIZONTAL RATIO: ", self.avg_horizontal_ratio)
+                    deviation_info = {
+                        'frame': self.num_frames,
+                        'timestamp': time.ctime(time.time()),
+                        'case': "horizontal ratio",
+                        'type': "deviation",
+                        'info': {
+                            'avg_horizontal_ratio': self.avg_horizontal_ratio,
+                            'horizontal_ratio': horizontal_ratio,
+                            'deviation_horizontal': deviation_horizontal
+                        }
+                    }
+                    self.anomaly_queue_log.put(deviation_info)
 
-            vertical_ratio = self.vertical_ratio()
             if vertical_ratio is not None:
-                self.avg_vertical_ratio = (self.avg_vertical_ratio * num_frames + vertical_ratio) / (num_frames + 1)
+                self.avg_vertical_ratio = (self.avg_vertical_ratio * self.num_frames + vertical_ratio) / (self.num_frames + 1)
                 deviation_vertical = abs(vertical_ratio - self.avg_vertical_ratio)
                 if deviation_vertical > self.vertical_ratio_deviation_threshold:
-                    #print("Deviation detected in vertical ratio.")
-                    self.anomaly_queue_log.put(f"Deviation: Vertical Ratio")
-            #print("VERTICAL RATIO:       ", self.vertical_ratio())
-            #print("AVG VERTICAL RATIO:   ", self.avg_vertical_ratio)
+                    deviation_info = {
+                        'frame': self.num_frames,
+                        'timestamp': time.ctime(time.time()),
+                        'case': "vertical ratio",
+                        'type': "deviation",
+                        'info': {
+                            'avg_vertical_ratio': self.avg_vertical_ratio,
+                            'vertical_ratio': vertical_ratio,
+                            'deviation_vertical': deviation_vertical
+                        }
+                    }
+                    self.anomaly_queue_log.put(deviation_info)
 
-            head_pose_angle = self.head_pose_angle()
             if head_pose_angle is not None:
                 head_pose_angle_deviation = False
                 for i in range(8):
-                    self.avg_head_pose_angle[i] = (self.avg_head_pose_angle[i] * num_frames + head_pose_angle[i]) / (
-                            num_frames + 1)
+                    self.avg_head_pose_angle[i] = (self.avg_head_pose_angle[i] * self.num_frames + head_pose_angle[i]) / (
+                            self.num_frames + 1)
                     deviation_angle = abs(head_pose_angle[i] - self.avg_head_pose_angle[i])
                     if deviation_angle > self.head_pose_angle_deviation_threshold:
-                        #print(f"Deviation detected in head pose angle {i + 1}.")
+                        deviation_info = {
+                            'frame': self.num_frames,
+                            'timestamp': time.ctime(time.time()),
+                            'case': "head pose angle",
+                            'type': "deviation",
+                            'info': {
+                                'avg_head_pose_angle': self.avg_head_pose_angle,
+                                'head_pose_angle': head_pose_angle,
+                                'deviation_angle': deviation_angle
+                            }
+                        }
                         head_pose_angle_deviation = True
                 if head_pose_angle_deviation:
-                    self.anomaly_queue_log.put(f"Deviation: Head Pose Angle")
-            #print("HEAD POSE:     ", head_pose_angle)
-            #print("AVG HEAD POSE: ", self.avg_head_pose_angle)
+                    self.anomaly_queue_log.put(deviation_info)
+
+        self.anomaly_queue_log2 = self.anomaly_queue_log
+
+    def calculate_velocities(self, pupil_positions_array):
+        x_positions = pupil_positions_array[:, 0]
+        y_positions = pupil_positions_array[:, 1]
+        dx = np.diff(x_positions)
+        dy = np.diff(y_positions)
+        velocities = np.sqrt(dx ** 2 + dy ** 2) * self.sampling_rate
+        return velocities
+
+    def detect_saccades(self):
+        middle_coordinate = ((self.pupil_left_coords()[0] + self.pupil_right_coords()[0]) / 2,
+                             (self.pupil_left_coords()[1] + self.pupil_right_coords()[1]) / 2)
+        self.pupil_positions.append(middle_coordinate)
+
+        pupil_positions_array = np.array(self.pupil_positions)
+        velocities = self.calculate_velocities(pupil_positions_array)
+        saccade_indices = np.where(velocities > self.saccade_threshold)[0]
+
+        new_saccades = set(saccade_indices) - self.logged_saccades
+        self.logged_saccades.update(new_saccades)
+
+        for saccade_index in new_saccades:
+            saccade_info = {
+                'frame': self.num_frames,
+                'timestamp': time.ctime(time.time()),
+                'case': "pupil",
+                'type': "saccade",
+                'info': {
+                    'middle_coordinate': middle_coordinate,
+                    'saccade_threshold': self.saccade_threshold,
+                }
+            }
+
+            self.anomaly_queue_log.put(saccade_info)
+
+        return list(new_saccades)
 
     def refresh(self, frame):
         """Refreshes the frame and analyzes it.
@@ -418,11 +520,17 @@ class GazeTracking(object):
             blinking_ratio = (self.eye_left.blinking + self.eye_right.blinking) / 2
             return blinking_ratio > 3.8
 
+    def toggle_debug(self):
+        if not self.debug_mode:
+            self.debug_mode = True
+        else:
+            self.debug_mode = False
+
     def annotated_frame(self):
         """Returns the main frame with pupils highlighted"""
         frame = self.frame.copy()
 
-        if self.pupils_located:
+        if self.pupils_located and self.debug_mode:
 
             # Mark Pupils
             color = (0, 255, 0)
