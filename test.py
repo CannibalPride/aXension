@@ -1,53 +1,63 @@
+import os
+import pprint
+
+from flask import Flask, render_template, Response
 import cv2
-import numpy as np
+import imutils
+from gaze_tracking import GazeTracking
+import mediapipe as mp
+import time
 
-# Load the pre-trained Haar cascade for detecting eyes
-eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+app = Flask(__name__)
+gaze = GazeTracking()
+webcam = cv2.VideoCapture(0)
+mp_face_mesh = mp.solutions.face_mesh
 
-# Capture video from the default camera
-cap = cv2.VideoCapture(0)
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-while True:
-    # Read the current frame
-    ret, frame = cap.read()
+def generate_frames():
+    global webcam, gaze
 
-    # Convert the frame to grayscale
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    with mp_face_mesh.FaceMesh(
+        max_num_faces=1,
+        refine_landmarks=True,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5
+    ) as face_mesh:
+        while True:
+            success, frame = webcam.read()
+            if not success:
+                break
 
-    # Detect eyes in the frame
-    eyes = eye_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
+            frame = imutils.resize(frame, width=1600)
+            frame.flags.writeable = False
 
-    # Draw rectangles around the detected eyes
-    for (ex, ey, ew, eh) in eyes:
-        cv2.rectangle(frame, (ex, ey), (ex + ew, ey + eh), (0, 255, 0), 2)
+            gaze.refresh(frame)
+            frame = gaze.annotated_frame()
 
-        # Calculate the center of each eye
-        eye_center_x = ex + ew // 2
-        eye_center_y = ey + eh // 2
+            ret, buffer = cv2.imencode('.jpg', frame)
+            frame = buffer.tobytes()
 
-        # Determine the quadrant based on the eye center coordinates
-        height, width, _ = frame.shape
-        if eye_center_x < width // 2:
-            if eye_center_y < height // 2:
-                quadrant = "Top Left"
-            else:
-                quadrant = "Bottom Left"
-        else:
-            if eye_center_y < height // 2:
-                quadrant = "Top Right"
-            else:
-                quadrant = "Bottom Right"
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
-        # Display the quadrant on the frame
-        cv2.putText(frame, quadrant, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-    # Display the resulting frame
-    cv2.imshow('Eye Tracking', frame)
+if __name__ == "__main__":
+    if not os.path.exists('logs'):
+        os.makedirs('logs')
 
-    # Exit loop if 'q' is pressed
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+    with open(f'logs/log.txt', 'w') as file:
+        while not gaze.anomaly_queue_log.empty():
+            item = pprint.pformat(gaze.anomaly_queue_log2.get())
+            log_entry = f"{time.ctime(time.time())}: \n{item}\n\n"
+            file.write(log_entry)
 
-# Release the video capture and close all windows
-cap.release()
+    app.run(debug=True, port=8080)
+
+webcam.release()
 cv2.destroyAllWindows()

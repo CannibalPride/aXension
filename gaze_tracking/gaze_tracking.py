@@ -29,7 +29,7 @@ class GazeTracking(object):
         self.right_gaze = None
         self.anomaly_queue_log = Queue()
         self.anomaly_queue_log2 = Queue()
-        self.debug_mode = False
+        self.debug_mode = True
 
         self.pupil_positions = []
         self.logged_saccades = set()
@@ -217,7 +217,7 @@ class GazeTracking(object):
                 #else:
                 #    print("No Transformation")
             except TypeError as e:
-                print("An error occurred:", e)
+                print("Transformation error occurred:", e)
 
 
             (self.b1, jacobian) = cv2.projectPoints(np.array([(350.0, 270.0, 0.0)]), rotation_vector,

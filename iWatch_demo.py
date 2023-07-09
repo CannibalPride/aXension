@@ -1,6 +1,9 @@
 import os
 import pprint
 
+# TODO disabled unresolved references
+# TODO disabled duplicate
+
 import cv2
 from gaze_tracking import GazeTracking
 import imutils
